@@ -17,11 +17,15 @@ The app runs entirely in your browser. It never requests a Discord token, connec
 - Enforce individual text limits and the combined 6,000-character embed budget before export.
 - Import/export message JSON. Exported messages always disable mentions.
 - Undo edits and keep up to 50 named templates in this browser, with portable backup/restore.
+- Open a saved template and choose **Update saved template** to edit or rename it in place. **Save as new** keeps a separate copy. Name collisions and failed storage writes preserve the existing template.
 - Export simple title/body/color templates for [Latch](https://github.com/informent/Latch)'s `/template import` command. Latch imports are new templates, never silent replacements.
+- Import a Latch JSON export back into the studio, edit it, and export it again.
 
 ### Event timestamps
 
 Choose a date in your device timezone and copy any of Discord's seven timestamp formats. A full event announcement includes both the precise time and a relative countdown. Discord renders these for each viewer's timezone. Check local times around daylight-saving transitions.
+
+Invalid calendar dates and skipped local times during a spring clock change are rejected rather than silently moved. A repeated time during an autumn clock change uses the browser's default occurrence; verify its UTC offset if that distinction matters.
 
 ### Game night
 
@@ -41,6 +45,8 @@ No dependency installation is needed to run the product. `npm run build` copies 
 ## Privacy and limits
 
 Drafts and templates use unencrypted browser local storage. Use **Clear local data** on shared computers and back up templates before clearing site data. The last valid draft is kept while an incomplete edit is in progress. Storage failures are reported; backup import preserves existing templates and never silently overwrites them. Message imports are limited to 64 KiB and shelf backups to 1 MiB.
+
+Export limits count the actual formatted UTF-8 file, including non-English text and URL metadata. If existing shelf data cannot be read, **Back up templates** downloads the original raw data for recovery instead of an empty shelf. That recovery file is not a validated backup and may need repair before import.
 
 JSON is not a message you can paste into Discord chat. This app creates payloads for a bot/webhook integration; it does not publish them. For direct posting, copy event announcements or game-night text, or use Latch's template commands. Remote URLs in imported embeds are preserved but are not fetched. Preview supports bold and inline code; it is an approximation, not a replica of Discord's Markdown renderer.
 

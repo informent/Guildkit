@@ -36,3 +36,39 @@ test('Latch export matches its portable schema and refuses lossy conversions', (
   for (const value of [G.preset('game-night'), { ...message, content: 'extra' }, { embeds: [{ title: 't', description: 'x'.repeat(4001) }] }]) assert.throws(() => G.latch(value, 'welcome'));
   assert.throws(() => G.latch(message, '../name'));
 });
+
+test('Latch exports import into the studio and round trip without losing message content', () => {
+  const original = { embeds: [{ title: 'Raid night', description: '@everyone Bring a friend', color: 0x73df9f }] };
+  const portable = G.latch(original, 'raid-night');
+  assert.deepEqual(G.parse(JSON.stringify(portable)), G.message(original));
+  assert.deepEqual(G.latch(G.parse(JSON.stringify(portable)), 'raid-night'), portable);
+  for (const document of [{ ...portable, version: 2 }, { ...portable, token: 'private' }, { ...portable, template: { ...portable.template, name: '../bad' } }, { ...portable, template: { ...portable.template, color: -1 } }, { ...portable, template: { ...portable.template, description: 'x'.repeat(4001) } }, { ...portable, template: { ...portable.template, title: '' } }]) assert.throws(() => G.parse(JSON.stringify(document)));
+});
+
+test('calendar rollover and nonexistent dates are refused instead of silently changing an event', () => {
+  for (const date of ['2027-02-29T18:00:00Z', '2026-02-30T12:00:00Z', '2100-02-29T00:00:00Z', '2026-04-31T12:00:00Z', '2026-10-21T24:00:00Z', '2026-00-01T00:00:00Z', '2026-01-00T00:00:00Z', '2026-10-21T12:60:00Z', '2026-10-21T12:00:00+01:60']) {
+    assert.throws(() => G.timestamp(date)); assert.throws(() => G.embed({ title: 'event', timestamp: date }));
+  }
+  assert.match(G.timestamp('2000-02-29T12:00:00Z'), /^<t:/);
+  assert.match(G.timestamp('2028-02-29T12:00:00Z'), /^<t:/);
+});
+
+test('messages must round trip within the actual pretty-printed UTF-8 export budget', () => {
+  const url = 'https://example.com/' + 'x'.repeat(1800);
+  assert.throws(() => G.message({ embeds: Array.from({ length: 10 }, () => ({ title: 'x', url, author: { name: 'a', url, icon_url: url }, footer: { text: 'f', icon_url: url }, image: { url }, thumbnail: { url } })) }), /64 KiB/);
+  const valid = G.message({ embeds: [{ description: '界'.repeat(4000) }] });
+  assert.deepEqual(G.parse(JSON.stringify(valid, null, 2) + '\n'), valid);
+});
+
+test('template backups count UTF-8 bytes and exported formatting before accepting a shelf', () => {
+  const url = 'https://example.com/' + 'x'.repeat(1800);
+  const message = G.message({ embeds: Array.from({ length: 10 }, () => ({ description: '界'.repeat(600), image: { url }, thumbnail: { url } })) });
+  const items = Array.from({ length: 20 }, (_, i) => ({ id: `id-${i}`, name: `Saved ${i}`, message }));
+  assert.ok(JSON.stringify(items).length < 1048576);
+  assert.throws(() => G.backup(items), /1 MiB/);
+  const backup = G.backup(items.slice(0, 10));
+  assert.ok(Buffer.byteLength(JSON.stringify(backup, null, 2) + '\n') <= 1048576);
+  assert.deepEqual(G.backup(JSON.parse(JSON.stringify(backup)).templates), backup);
+  assert.throws(() => G.backup([items[0], items[0]]), /unique/);
+  assert.throws(() => G.backup([{ ...items[0], unexpected: true }]), /unsupported/);
+});

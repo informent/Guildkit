@@ -35,8 +35,7 @@
     if (input.url !== undefined) output.url = url(input.url, 'Title URL');
     for (const key of ['image', 'thumbnail']) if (input[key] !== undefined) { keys(input[key], ['url'], key); output[key] = { url: url(input[key].url, key) }; }
     if (input.timestamp !== undefined) {
-      if (typeof input.timestamp !== 'string' || input.timestamp.length > 40 || !Number.isFinite(Date.parse(input.timestamp))) throw new Error('Timestamp must be an ISO date.');
-      output.timestamp = new Date(input.timestamp).toISOString();
+      output.timestamp = new Date(isoMilliseconds(input.timestamp)).toISOString();
     }
     if (input.author !== undefined) {
       keys(input.author, ['name', 'url', 'icon_url'], 'Author'); output.author = { name: text(input.author.name, 256, 'Author name', true) };
@@ -61,17 +60,53 @@
     const embeds = input.embeds.map(embed);
     if (!content.trim() && !embeds.length) throw new Error('Add a message or embed.');
     if (embeds.reduce((sum, value) => sum + characters(value), 0) > 6000) throw new Error('Combined embed text must not exceed 6000 characters.');
-    return { content, embeds, allowed_mentions: { parse: [] } };
+    const output = { content, embeds, allowed_mentions: { parse: [] } };
+    if (fileBytes(output) > 65536) throw new Error('Exported message JSON must fit within 64 KiB. Shorten text or URLs.');
+    return output;
   }
   function parse(json) {
     if (typeof json !== 'string' || new TextEncoder().encode(json).length > 65536) throw new Error('Choose a JSON message under 64 KiB.');
     let input; try { input = JSON.parse(json); } catch { throw new Error('This is not valid JSON.'); }
+    if (input?.kind === 'latch-template') {
+      keys(input, ['version', 'kind', 'template'], 'Latch template document');
+      if (input.version !== 1) throw new Error('Unsupported Latch template version.');
+      keys(input.template, ['name', 'title', 'description', 'color'], 'Latch template');
+      const item = input.template;
+      if (typeof item.name !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,31}$/.test(item.name)) throw new Error('Invalid Latch template name.');
+      text(item.title, 256, 'Latch title', true); text(item.description, 4000, 'Latch description', true);
+      if (!Number.isInteger(item.color)) throw new Error('Latch template color must be an integer.');
+      return message({ embeds: [{ title: item.title, description: item.description, color: item.color }] });
+    }
     return message(input);
+  }
+  function fileBytes(value) { return new TextEncoder().encode(JSON.stringify(value, null, 2) + '\n').length; }
+  function backup(templates) {
+    if (!Array.isArray(templates) || templates.length > 50) throw new Error('A template backup supports up to 50 templates.');
+    const ids = new Set();
+    const items = templates.map(item => {
+      keys(item, ['id', 'name', 'message'], 'Saved template');
+      if (typeof item.id !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(item.id) || ids.has(item.id)) throw new Error('Saved template IDs must be valid and unique.');
+      text(item.name, 60, 'Template name', true); ids.add(item.id);
+      return { id: item.id, name: item.name, message: message(item.message) };
+    });
+    const output = { version: 1, kind: 'guildkit-backup', templates: items };
+    if (fileBytes(output) > 1048576) throw new Error('Template backup exceeds 1 MiB. Export individual messages or remove unused templates.');
+    return output;
+  }
+  function isoMilliseconds(value) {
+    const match = typeof value === 'string' && /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)(?::(\d\d)(?:\.\d{1,3})?)?(?:Z|[+-](\d\d):(\d\d))$/.exec(value);
+    if (!match) throw new Error('Choose a valid ISO date and time with a timezone.');
+    const [, year, month, day, hour, minute, second = '0', offsetHour = '0', offsetMinute = '0'] = match;
+    const monthEnd = new Date(0); monthEnd.setUTCFullYear(Number(year), Number(month), 0);
+    if (+month < 1 || +month > 12 || +day < 1 || +day > monthEnd.getUTCDate() || +hour > 23 || +minute > 59 || +second > 59 || +offsetHour > 23 || +offsetMinute > 59) throw new Error('That calendar date or time does not exist.');
+    const milliseconds = Date.parse(value);
+    if (!Number.isFinite(milliseconds)) throw new Error('Choose a valid ISO date and time.');
+    return milliseconds;
   }
   function preset(name) { if (!Object.hasOwn(PRESETS, name)) throw new Error('Unknown preset.'); return message({ embeds: [structuredClone(PRESETS[name])] }); }
   function timestamp(date, style = 'F') {
     if (!['t', 'T', 'd', 'D', 'f', 'F', 'R'].includes(style)) throw new Error('Choose a supported timestamp style.');
-    const milliseconds = typeof date === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d(?:\.\d{1,3})?)?(?:Z|[+-]\d\d:\d\d)$/.test(date) ? Date.parse(date) : NaN;
+    const milliseconds = isoMilliseconds(date);
     if (!Number.isFinite(milliseconds) || milliseconds < 0 || milliseconds > 253402300799999) throw new Error('Choose a date from 1970 to 9999 with a timezone.');
     return `<t:${Math.floor(milliseconds / 1000)}:${style}>`;
   }
@@ -82,5 +117,5 @@
     if (value.content || value.embeds.length !== 1 || !item.title?.trim() || !item.description?.trim() || item.description.length > 4000 || Object.keys(item).some(key => !['title', 'description', 'color'].includes(key))) throw new Error('Latch templates support one title, description (up to 4000 characters) and color. Remove message text and other embed fields first.');
     return { version: 1, kind: 'latch-template', template: { name, title: item.title, description: item.description, color: item.color ?? 0x5865f2 } };
   }
-  return Object.freeze({ message, embed, parse, preset, characters, timestamp, latch, presetNames: Object.keys(PRESETS) });
+  return Object.freeze({ message, embed, parse, preset, characters, timestamp, latch, backup, presetNames: Object.keys(PRESETS) });
 });

@@ -2,23 +2,18 @@
 (() => {
   const G = window.Guildkit, $ = id => document.getElementById(id);
   const DRAFT = 'guildkit.draft.v1', SHELF = 'guildkit.templates.v1';
-  let draft = G.preset('game-night'), templates = [], selected = 0, history = [], noticeTimer, importMode = 'message', lineup = '';
+  let draft = G.preset('game-night'), templates = [], selected = 0, activeTemplateId = null, shelfRecovery = false, history = [], noticeTimer, importMode = 'message', lineup = '';
   const clone = value => structuredClone(value);
   function notify(message, error = false) { clearTimeout(noticeTimer); $('notice').textContent = message; $('notice').classList.toggle('error', error); $('notice').hidden = false; noticeTimer = setTimeout(() => { $('notice').hidden = true; }, 6500); }
   function attempt(action) { try { const result = action(); if (result?.catch) result.catch(error => notify(error.message, true)); } catch (error) { notify(error.message, true); } }
   function store(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { notify('Browser storage is unavailable or full. Export a backup before leaving.', true); return false; } }
-  function remember() { history.push({ draft: clone(draft), selected }); if (history.length > 30) history.shift(); $('undo-btn').disabled = false; }
+  function remember() { history.push({ draft: clone(draft), selected, activeTemplateId }); if (history.length > 30) history.shift(); $('undo-btn').disabled = false; }
   function persist() { try { store(DRAFT, G.message(draft)); } catch { /* Keep the previous valid draft while the user edits. */ } }
   function readTemplates(value) {
-    if (!Array.isArray(value) || value.length > 50 || JSON.stringify(value).length > 1048576) throw new Error('A template backup supports up to 50 templates and 1 MiB.');
-    const ids = new Set();
-    return value.map(item => {
-      if (!item || Object.keys(item).sort().join(',') !== 'id,message,name' || typeof item.id !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(item.id) || ids.has(item.id) || typeof item.name !== 'string' || !item.name.trim() || item.name.length > 60) throw new Error('Invalid template backup.');
-      ids.add(item.id); return { id: item.id, name: item.name, message: G.message(item.message) };
-    });
+    return G.backup(value).templates;
   }
   try { const saved = localStorage.getItem(DRAFT); if (saved) draft = G.parse(saved); } catch { notify('A saved draft could not be loaded. It has not been deleted.', true); }
-  try { const saved = localStorage.getItem(SHELF); if (saved) templates = readTemplates(JSON.parse(saved)); } catch { notify('Your saved templates could not be loaded. Export or recover browser storage before saving new templates.', true); $('save-template').disabled = true; $('restore-templates').disabled = true; }
+  try { const saved = localStorage.getItem(SHELF); if (saved) templates = readTemplates(JSON.parse(saved)); } catch { shelfRecovery = true; notify('Your saved templates could not be loaded. Back up templates to download the original data for recovery.', true); $('save-template').disabled = true; $('restore-templates').disabled = true; }
   function current() { return draft.embeds[selected]; }
   function node(tag, text, className) { const value = document.createElement(tag); if (text !== undefined) value.textContent = text; if (className) value.className = className; return value; }
   function markdown(element, text) {
@@ -34,6 +29,7 @@
     try { G.message(draft); $('validity').textContent = 'Ready to export'; } catch (error) { valid = false; $('validity').textContent = error.message; }
     $('validity').classList.toggle('error', !valid);
     for (const id of ['export-btn', 'copy-json', 'export-latch', 'save-template']) $(id).disabled = !valid || id === 'save-template' && $('restore-templates').disabled;
+    $('update-template').disabled = !valid || !templates.some(item => item.id === activeTemplateId) || $('restore-templates').disabled;
     markdown($('preview-content'), draft.content || ''); $('preview-embeds').replaceChildren();
     for (const item of draft.embeds) {
       const card = node('div', undefined, 'discord-embed'); card.style.borderLeftColor = '#' + (item.color ?? 0x5865f2).toString(16).padStart(6, '0');
@@ -76,9 +72,12 @@
     for (const id of ['title', 'description', 'color', 'author', 'footer']) $(id).disabled = !current();
     fields(); render();
   }
-  function replace(value) { remember(); draft = value; selected = 0; persist(); fill(); }
+  function replace(value, templateId = null) { remember(); draft = value; selected = 0; activeTemplateId = templateId; persist(); fill(); }
   function download(name, value) {
-    const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2) + '\n'], { type: 'application/json' }));
+    downloadText(name, JSON.stringify(value, null, 2) + '\n');
+  }
+  function downloadText(name, text) {
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
     const link = node('a'); link.href = url; link.download = name; document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 30000);
   }
   async function copy(value) { try { await navigator.clipboard.writeText(value); notify('Copied. Ready for your community.'); } catch { notify('Clipboard access was denied. Export a JSON file instead.', true); } }
@@ -88,8 +87,8 @@
     templates.forEach(item => {
       const card = node('article', undefined, 'template-card'); card.append(node('h2', item.name), node('p', (item.message.embeds[0]?.description || item.message.content || 'Saved message').slice(0, 140)));
       const actions = node('div', undefined, 'inline-actions'), load = node('button', 'Open in studio ↗', 'text-button'), remove = node('button', 'Delete', 'text-button danger');
-      load.onclick = () => { replace(clone(item.message)); $('template-name').value = item.name; location.hash = '#studio'; notify('Template opened. Save with a new name to keep another version.'); };
-      remove.onclick = () => { if (!confirm(`Delete “${item.name}” from this browser?`)) return; const next = templates.filter(value => value.id !== item.id); if (store(SHELF, next)) { templates = next; shelf(); notify('Template deleted.'); } };
+      load.onclick = () => { replace(clone(item.message), item.id); $('template-name').value = item.name; location.hash = '#studio'; notify('Template opened. Update it explicitly, or save a new copy with a different name.'); };
+      remove.onclick = () => { if (!confirm(`Delete “${item.name}” from this browser?`)) return; const next = templates.filter(value => value.id !== item.id); if (store(SHELF, next)) { templates = next; if (activeTemplateId === item.id) activeTemplateId = null; shelf(); render(); notify('Template deleted.'); } };
       actions.append(load, remove); card.append(actions); $('template-shelf').append(card);
     });
   }
@@ -103,7 +102,7 @@
     else { if (value) item[id] = value; else delete item[id]; }
     persist(); render();
   };
-  $('undo-btn').onclick = () => { const previous = history.pop(); if (!previous) return; draft = previous.draft; selected = previous.selected; $('undo-btn').disabled = history.length === 0; persist(); fill(); };
+  $('undo-btn').onclick = () => { const previous = history.pop(); if (!previous) return; draft = previous.draft; selected = previous.selected; activeTemplateId = previous.activeTemplateId; $('undo-btn').disabled = history.length === 0; persist(); fill(); };
   $('embed-select').onchange = () => { selected = Number($('embed-select').value); fill(); };
   $('add-embed').onclick = () => { if (draft.embeds.length >= 10) return; remember(); draft.embeds.push({ title: 'New embed', color: 0x73df9f }); selected = draft.embeds.length - 1; persist(); fill(); };
   $('remove-embed').onclick = () => { if (!current()) return; remember(); draft.embeds.splice(selected, 1); persist(); fill(); };
@@ -113,8 +112,24 @@
   $('export-btn').onclick = () => attempt(() => download('guildkit-message.json', G.message(draft)));
   $('copy-json').onclick = () => attempt(() => copy(JSON.stringify(G.message(draft), null, 2)));
   $('export-latch').onclick = () => attempt(() => { const value = G.latch(draft, 'guildkit-message'); const json = JSON.stringify(value, null, 2); if (json.length > 6000) throw new Error('Latch import accepts up to 6000 JSON characters. Shorten this message first.'); download('guildkit-latch-template.json', value); });
-  $('save-template').onclick = () => attempt(() => { const name = $('template-name').value.trim(); if (!name || name.length > 60) throw new Error('Give your template a name of 1 to 60 characters.'); if (templates.length >= 50) throw new Error('Your shelf is full. Export or delete a template first.'); if (templates.some(value => value.name.toLowerCase() === name.toLowerCase())) throw new Error('That name is already saved. Use a different name for this version.'); const next = readTemplates([...templates, { id: crypto.randomUUID(), name, message: G.message(draft) }]); if (store(SHELF, next)) { templates = next; shelf(); notify('Template saved on this browser.'); } });
-  $('backup-templates').onclick = () => download('guildkit-templates.json', { version: 1, kind: 'guildkit-backup', templates });
+  $('save-template').onclick = () => attempt(() => { const name = $('template-name').value.trim(); if (!name || name.length > 60) throw new Error('Give your template a name of 1 to 60 characters.'); if (templates.length >= 50) throw new Error('Your shelf is full. Export or delete a template first.'); if (templates.some(value => value.name.toLowerCase() === name.toLowerCase())) throw new Error('That name is already saved. Use a different name for this version.'); const next = readTemplates([...templates, { id: crypto.randomUUID(), name, message: G.message(draft) }]); if (store(SHELF, next)) { templates = next; activeTemplateId = next.at(-1).id; shelf(); render(); notify('Template saved on this browser.'); } });
+  $('update-template').onclick = () => attempt(() => {
+    const name = $('template-name').value.trim(), index = templates.findIndex(item => item.id === activeTemplateId);
+    if (index < 0) throw new Error('Open a saved template before updating it.');
+    if (!name || name.length > 60) throw new Error('Give your template a name of 1 to 60 characters.');
+    if (templates.some(item => item.id !== activeTemplateId && item.name.toLowerCase() === name.toLowerCase())) throw new Error('Another template already uses that name.');
+    const next = [...templates]; next[index] = { ...templates[index], name, message: G.message(draft) };
+    const validated = readTemplates(next);
+    if (store(SHELF, validated)) { templates = validated; shelf(); notify('Saved template updated. Your other templates are unchanged.'); }
+  });
+  $('backup-templates').onclick = () => attempt(() => {
+    if (shelfRecovery) {
+      const raw = localStorage.getItem(SHELF);
+      if (raw === null) throw new Error('No stored template data is available to recover.');
+      downloadText('guildkit-templates-recovery.json', raw);
+      notify('Original local data downloaded for recovery. This is not a validated template backup.');
+    } else download('guildkit-templates.json', G.backup(templates));
+  });
   $('import-btn').onclick = () => { importMode = 'message'; $('file-input').value = ''; $('file-input').click(); };
   $('restore-templates').onclick = () => { importMode = 'backup'; $('file-input').value = ''; $('file-input').click(); };
   $('file-input').onchange = () => attempt(async () => {
@@ -128,11 +143,16 @@
       if (store(SHELF, next)) { templates = next; shelf(); notify(`${incoming.length} templates imported. Existing templates were kept.`); }
     }
   });
-  $('clear-local').onclick = () => { if (!confirm('Remove this browser’s Guildkit draft and all saved templates? Export a backup first.')) return; try { localStorage.removeItem(DRAFT); localStorage.removeItem(SHELF); } catch { notify('Browser data could not be cleared.', true); return; } templates = []; history = []; draft = G.preset('game-night'); selected = 0; $('undo-btn').disabled = true; $('restore-templates').disabled = false; shelf(); fill(); notify('Local data cleared. The starter message is not saved until you edit it.'); };
+  $('clear-local').onclick = () => { if (!confirm('Remove this browser’s Guildkit draft and all saved templates? Export a backup first.')) return; try { localStorage.removeItem(DRAFT); localStorage.removeItem(SHELF); } catch { notify('Browser data could not be cleared.', true); return; } templates = []; history = []; shelfRecovery = false; activeTemplateId = null; draft = G.preset('game-night'); selected = 0; $('undo-btn').disabled = true; $('restore-templates').disabled = false; shelf(); fill(); notify('Local data cleared. The starter message is not saved until you edit it.'); };
   for (const mode of ['dark', 'light']) $(mode + '-preview').onclick = () => { $('discord-preview').classList.toggle('light', mode === 'light'); $('dark-preview').setAttribute('aria-pressed', mode === 'dark'); $('light-preview').setAttribute('aria-pressed', mode === 'light'); };
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone; $('timezone').textContent = `Your timezone: ${zone}. Discord shows each viewer their own local time.`;
   const date = new Date(Date.now() + 3600000); date.setSeconds(0, 0); $('event-date').value = new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-  function eventISO() { const value = $('event-date').value; if (!value || !$('event-date').validity.valid || !Number.isFinite(new Date(value).getTime())) throw new Error('Choose a valid date and time.'); return new Date(value).toISOString(); }
+  function eventISO() {
+    const value = $('event-date').value, date = new Date(value);
+    if (!value || !$('event-date').validity.valid || !Number.isFinite(date.getTime())) throw new Error('Choose a valid date and time.');
+    if (new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16) !== value) throw new Error('That local time does not exist because the clocks change. Choose another time.');
+    return date.toISOString();
+  }
   function timestamps() {
     $('timestamp-results').replaceChildren();
     attempt(() => {
