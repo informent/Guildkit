@@ -1,0 +1,2 @@
+const { defineConfig } = require('@playwright/test');
+module.exports = defineConfig({ testDir: './test/browser', timeout: 30000, use: { baseURL: 'http://127.0.0.1:4317', browserName: 'chromium', headless: true, screenshot: 'only-on-failure' }, webServer: { command: 'node scripts/serve.cjs', url: 'http://127.0.0.1:4317', reuseExistingServer: !process.env.CI }, projects: [{ name: 'desktop', use: { viewport: { width: 1440, height: 1100 } } }, { name: 'mobile', use: { viewport: { width: 390, height: 844 } } }] });

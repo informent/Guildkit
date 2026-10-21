@@ -1,0 +1,20 @@
+{
+  "name": "guildkit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Private Discord message templates, event timestamps and game-night planning.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.9.0"
+  },
+  "scripts": {
+    "start": "node scripts/serve.cjs",
+    "test": "node --test test/*.test.cjs",
+    "check": "node --check app.js && node --check engine.js",
+    "build": "node scripts/build.cjs",
+    "test:browser": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1"
+  }
+}
