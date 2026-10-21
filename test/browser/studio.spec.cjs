@@ -49,3 +49,40 @@ test('timestamps and game-night tools work and suppress mentions', async ({ page
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: `test-results/game-night-${info.project.name}.png`, fullPage: true });
 });
+
+test('saved templates update explicitly, preserve IDs and refuse name collisions', async ({ page }) => {
+  await page.locator('#template-name').fill('Friday raid'); await page.locator('#save-template').click();
+  await page.locator('#template-name').fill('Backup copy'); await page.locator('#save-template').click();
+  await page.goto('/#templates'); await page.locator('.template-card').first().getByRole('button', { name: 'Open in studio' }).click();
+  const id = await page.evaluate(() => JSON.parse(localStorage.getItem('guildkit.templates.v1'))[0].id);
+  await page.locator('#title').fill('A different raid'); await page.locator('#template-name').fill('Backup copy'); await page.locator('#update-template').click();
+  await expect(page.locator('#notice')).toContainText('already uses that name');
+  await page.locator('#template-name').fill('Sunday raid'); await page.locator('#update-template').click();
+  await page.goto('/#templates'); await expect(page.locator('.template-card')).toHaveCount(2);
+  await expect(page.locator('.template-card').first().getByRole('heading')).toHaveText('Sunday raid');
+  await page.reload(); await page.locator('.template-card').first().getByRole('button', { name: 'Open in studio' }).click();
+  await expect(page.locator('#title')).toHaveValue('A different raid');
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('guildkit.templates.v1'))[0].id)).toBe(id);
+});
+
+test('failed template writes preserve the saved message and corrupted shelves can be recovered', async ({ page }) => {
+  await page.locator('#template-name').fill('Keep me'); await page.locator('#save-template').click();
+  await page.evaluate(() => { const original = Storage.prototype.setItem; Storage.prototype.setItem = function (key, value) { if (key === 'guildkit.templates.v1') throw new DOMException('Quota', 'QuotaExceededError'); return original.call(this, key, value); }; });
+  await page.locator('#title').fill('Unsaved change'); await page.locator('#update-template').click();
+  await expect(page.locator('#notice')).toContainText('unavailable or full');
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('guildkit.templates.v1'))[0].message.embeds[0].title)).toBe('Game night is on.');
+  await page.reload(); await page.evaluate(() => localStorage.setItem('guildkit.templates.v1', '{broken original data'));
+  await page.reload(); await expect(page.locator('#save-template')).toBeDisabled();
+  await page.goto('/#templates'); const pending = page.waitForEvent('download'); await page.locator('#backup-templates').click(); const download = await pending;
+  expect(require('node:fs').readFileSync(await download.path(), 'utf8')).toBe('{broken original data');
+});
+
+test('Latch JSON imports preview safely and daylight-saving gaps are rejected', async ({ page }) => {
+  await page.locator('#import-btn').click(); await page.locator('#file-input').setInputFiles({ name: 'latch.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ version: 1, kind: 'latch-template', template: { name: 'welcome', title: 'Welcome back', description: '@everyone **Hello**', color: 42 } })) });
+  await expect(page.locator('#title')).toHaveValue('Welcome back'); await expect(page.locator('#preview-embeds strong')).toHaveText('Hello');
+  const context = await page.context().browser().newContext({ timezoneId: 'America/New_York' });
+  try {
+    const eventPage = await context.newPage(); await eventPage.goto('http://127.0.0.1:4317/#timestamps'); await eventPage.locator('#event-date').fill('2027-03-14T02:30');
+    await expect(eventPage.locator('#notice')).toContainText('does not exist'); await expect(eventPage.locator('.timestamp-row')).toHaveCount(0);
+  } finally { await context.close(); }
+});
